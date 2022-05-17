@@ -1,6 +1,6 @@
 #!/bin/bash
 pushd frontend
-trunk build --public-url /assets/
+trunk build --public-url /assets/ --release
 popd 
 
 tailwindcss -o dist/tailwind.css
