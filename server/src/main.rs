@@ -42,6 +42,13 @@ async fn main() {
             get(property_read)
                 .post(property_update)
                 .delete(property_delete),
+        )
+        .route("/property/:id/tags", get(tags_list))
+        .route(
+            "/property/:id/tags/:tag_id",
+            get(read_tag_by_id)
+                .post(add_tag_by_id)
+                .delete(delete_tag_by_id),
         );
     let api = Router::new().nest("/v1", v1).layer(Extension(pool));
     let app = Router::new().merge(spa).nest("/api", api).nest(
@@ -49,25 +56,89 @@ async fn main() {
         get_service(ServeDir::new("uploads")).handle_error(static_serve_error),
     );
 
-    let socket_addr = SocketAddr::from((IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080));
+    let socket_addr = SocketAddr::from((IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 8080));
     axum::Server::bind(&socket_addr)
         .serve(app.into_make_service())
         .await
         .expect("Unable to start backend");
 }
 
+async fn read_tag_by_id(
+    Path((id, tag_id)): Path<(i32, i32)>,
+    Extension(pool): Extension<PgPool>,
+) -> impl IntoResponse {
+    sqlx::query!(
+        "SELECT property_id, tag_id 
+         FROM property_tags 
+         WHERE property_id = $1 AND tag_id = $2",
+        id,
+        tag_id
+    )
+    .fetch_optional(&pool)
+    .await
+    .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, format!("{err}")))
+    .transpose()
+    .ok_or((StatusCode::NOT_FOUND, "Not found"))
+    .map(|_| (StatusCode::OK, ""))
+}
+
+async fn add_tag_by_id(
+    Path((id, tag_id)): Path<(i32, i32)>,
+    Extension(pool): Extension<PgPool>,
+) -> impl IntoResponse {
+    sqlx::query!(
+        "INSERT INTO property_tags (property_id, tag_id) 
+         VALUES ($1, $2)",
+        id,
+        tag_id
+    )
+    .execute(&pool)
+    .await
+    .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, format!("{err}")))
+    .map(|_| (StatusCode::OK, "OK".to_string()))
+}
+
+async fn delete_tag_by_id(
+    Path((id, tag_id)): Path<(i32, i32)>,
+    Extension(pool): Extension<PgPool>,
+) -> impl IntoResponse {
+    sqlx::query!(
+        "DELETE FROM property_tags 
+         WHERE property_id = $1 AND tag_id = $2",
+        id,
+        tag_id
+    )
+    .execute(&pool)
+    .await
+    .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, format!("{err}")))
+    .map(|_| (StatusCode::OK, "OK".to_string()))
+}
+
+async fn tags_list(Path(id): Path<i32>, Extension(pool): Extension<PgPool>) -> impl IntoResponse {
+    sqlx::query!(
+        "SELECT tag_id FROM property_tags WHERE property_id = $1",
+        id
+    )
+    .fetch_all(&pool)
+    .await
+    .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, format!("{err}")))
+    .map(|vec| Json(vec.iter().map(|anon| anon.tag_id).collect::<Vec<i32>>()))
+}
+
 #[derive(Deserialize)]
 struct ListQuery {
     page: Option<i64>,
 }
+
 async fn property_list(
     Query(query): Query<ListQuery>,
     Extension(pool): Extension<PgPool>,
 ) -> impl IntoResponse {
-    let offset = query.page.map_or(0, |x| x * 20);
+    let offset = query.page.map_or(0, |page| page * 20);
     sqlx::query_as!(
         Property,
-        "SELECT * FROM properties LIMIT 20 OFFSET $1",
+        "SELECT * FROM properties 
+         LIMIT 20 OFFSET $1",
         offset
     )
     .fetch_all(&pool)
@@ -128,7 +199,10 @@ async fn property_create(
     field
         .content_type()
         .filter(|content_type| content_type.contains("application/json"))
-        .ok_or((StatusCode::BAD_REQUEST, "Wrong content type".to_string()))?;
+        .ok_or((
+            StatusCode::BAD_REQUEST,
+            format!("Wrong content type {}", field.content_type().unwrap()),
+        ))?;
 
     let property: Property = field
         .text()
@@ -151,8 +225,8 @@ async fn property_create(
 
     let insert_result = sqlx::query!(
         "INSERT INTO properties 
-        (name, location, area, property_type, wc, floor, tothesea, furniture, appliances, gallery_location) 
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
+        (name, location, area, property_type, wc, floor, tothesea, furniture, appliances, price, gallery_location) 
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) 
         RETURNING id",
         property.name,
         property.location,
@@ -163,6 +237,7 @@ async fn property_create(
         property.tothesea,
         property.furniture,
         property.appliances,
+        property.price,
         uuid).fetch_one(&pool).await.map(|result| Json(result.id)).map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, format!("{err}")));
     if insert_result.is_err() {
         tokio::fs::remove_dir_all(upload_dir).await;

@@ -3,6 +3,7 @@ use sqlx::types::chrono::{DateTime, Utc};
 
 #[derive(Serialize, Deserialize)]
 pub struct Property {
+    #[serde(default)]
     pub id: i32,
     pub name: String,
     pub location: i32,
@@ -13,8 +14,9 @@ pub struct Property {
     pub tothesea: i32,
     pub furniture: bool,
     pub appliances: bool,
+    pub price: i32,
     #[serde(skip_deserializing)]
     pub posting_date: Option<DateTime<Utc>>,
     #[serde(skip_deserializing)]
-    pub gallery_location: String,
+    pub gallery_location: Option<String>,
 }
